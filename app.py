@@ -1,10 +1,9 @@
 """
-AuraScent Master Ultimate v8.9 + FULL HYBRID ENGINE + GLOBAL REPORTING
-====================================================================
+AuraScent Master Ultimate v9.1 + BALANCED ENGINE (5 per Category)
+================================================================
 """
 
 import streamlit as st
-import json
 import numpy as np
 import pandas as pd
 from typing import Dict, List, Tuple, Optional, Any, Set
@@ -17,7 +16,6 @@ import re
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from collections import defaultdict, Counter
 
 warnings.filterwarnings('ignore')
 
@@ -26,8 +24,6 @@ warnings.filterwarnings('ignore')
 # ============================================================================
 
 AURA_KEYS = ["confidence", "sensuality", "formality", "intensity", "uniqueness", "approachability", "maturity", "extroversion"]
-
-# Orta Doğu markaları listesi
 MIDDLE_EAST_BRANDS = ["Rasasi", "Lattafa", "Afnan", "Alhambra", "Ajmal", "Al Haramain", "Swiss Arabian", "Armaf", "Fragrance World", "Paris Corner"]
 
 BRAND_TIERS = {
@@ -37,9 +33,7 @@ BRAND_TIERS = {
 }
 
 def z(**kwargs):
-    out = {k: 0.0 for k in AURA_KEYS}
-    out.update(kwargs)
-    return out
+    out = {k: 0.0 for k in AURA_KEYS}; out.update(kwargs); return out
 
 QUESTIONS = {
     "Q1": {"question": "Kendinizi nasıl tanımlarsınız?", "options": ["Doğal Lider", "Klasik Beyefendi", "Özgür Ruhlu / Asi", "Modern Minimalist", "Romantik / Çekici", "Sportif / Enerjik"]},
@@ -69,19 +63,15 @@ SURVEY_MAPPING = {
 
 @dataclass
 class ExpertRecommendation:
-    perfume_name: str; brand: str; cluster: str; similarity_score: float; intensity: float; longevity: float; sillage: float; why_recommended: str; best_occasions: List[str]; seasonal_fit: List[str]; compliment_score: float; versatility_score: float; progression_level: str; brand_tier: str
+    perfume_name: str; brand: str; cluster: str; similarity_score: float; brand_tier: str
 
-# ============================================================================
-# MASTER ENGINE V8.9
-# ============================================================================
-
-class MasterUltimateEngineV8:
+class MasterUltimateEngineV91:
     def __init__(self, csv_path: str):
         self.df = pd.read_csv(csv_path)
         self.df['brand_tier'] = self.df['brand'].apply(self._identify_tier)
 
     def _identify_tier(self, brand):
-        brand_l = brand.lower()
+        brand_l = str(brand).lower()
         if "zara" in brand_l: return "zara"
         if any(b.lower() in brand_l for b in MIDDLE_EAST_BRANDS): return "middle_east"
         for tier, brands in BRAND_TIERS.items():
@@ -96,10 +86,10 @@ class MasterUltimateEngineV8:
         return {k: float(np.clip(1 / (1 + math.exp(-1.6 * raw[k])), 0, 1)) for k in AURA_KEYS}
 
     def _extract_base(self, name):
-        clean = re.sub(r'for men.*$|for women.*$', '', name.lower())
+        clean = re.sub(r'for men.*$|for women.*$', '', str(name).lower())
         return " ".join(clean.split()[:2])
 
-    def recommend_hybrid_signature(self, answers):
+    def recommend_balanced(self, answers):
         user_aura = self._compute_aura(answers)
         u_vec = np.array([user_aura[k] for k in AURA_KEYS])
         p_vecs = self.df[[f'aura_{k}' for k in AURA_KEYS]].values
@@ -107,98 +97,113 @@ class MasterUltimateEngineV8:
         p_n = p_vecs / (np.linalg.norm(p_vecs, axis=1, keepdims=True) + 1e-12)
         self.df['similarity'] = p_n @ u_n
         
-        mask = ~self.df['name'].str.contains('Spiderman|Kids', case=False, na=False)
-        valid = self.df[mask].sort_values('similarity', ascending=False)
+        valid = self.df[~self.df['name'].str.contains('Spiderman|Kids', case=False, na=False)].sort_values('similarity', ascending=False)
         
         signature = []; used_bases = set()
-        target_tiers = ["niche", "premium", "zara", "middle_east"]
-        
-        for tier in target_tiers:
+        for tier in ["niche", "premium", "zara", "middle_east"]:
             pool = valid[valid['brand_tier'] == tier]
+            count = 0
             for _, row in pool.iterrows():
                 base = self._extract_base(row['name'])
                 if base not in used_bases:
                     signature.append(self._to_rec(row))
-                    used_bases.add(base); break
-        return signature, user_aura
-
-    def build_wardrobe(self, answers, exclude_bases):
-        occasions = ["Kapalı Ofis", "Randevu Gecesi", "Günlük Hayat"]
-        wardrobe = {}; all_used = set(exclude_bases)
-        for occ in occasions:
+                    used_bases.add(base); count += 1
+                if count >= 5: break
+        
+        wardrobe = {}
+        for occ in ["Kapalı Ofis", "Randevu Gecesi", "Günlük Hayat"]:
             occ_ans = answers.copy(); occ_ans["Q2"] = occ
-            user_aura = self._compute_aura(occ_ans)
-            u_vec = np.array([user_aura[k] for k in AURA_KEYS])
-            p_vecs = self.df[[f'aura_{k}' for k in AURA_KEYS]].values
-            u_n = u_vec / (np.linalg.norm(u_vec) + 1e-12)
-            p_n = p_vecs / (np.linalg.norm(p_vecs, axis=1, keepdims=True) + 1e-12)
-            self.df['similarity'] = p_n @ u_n
-            valid = self.df[~self.df['name'].str.contains('Spiderman', case=False)].sort_values('similarity', ascending=False)
+            u_aura_occ = self._compute_aura(occ_ans)
+            u_v_occ = np.array([u_aura_occ[k] for k in AURA_KEYS])
+            sim_occ = p_n @ (u_v_occ / (np.linalg.norm(u_v_occ) + 1e-12))
+            self.df['similarity'] = sim_occ
+            valid_occ = self.df[~self.df['name'].str.contains('Spiderman', case=False)].sort_values('similarity', ascending=False)
             occ_recs = []
-            for _, row in valid.iterrows():
+            for _, row in valid_occ.iterrows():
                 base = self._extract_base(row['name'])
-                if base not in all_used and len(occ_recs) < 2:
+                if base not in used_bases and len(occ_recs) < 5:
                     occ_recs.append(self._to_rec(row))
-                    all_used.add(base)
+                    used_bases.add(base)
             wardrobe[occ] = occ_recs
-        return wardrobe
+            
+        return signature, wardrobe
 
     def _to_rec(self, row):
-        return ExpertRecommendation(perfume_name=row['name'], brand=row['brand'], cluster=row['cluster'], similarity_score=row['similarity'], intensity=0.5, longevity=0.5, sillage=0.5, why_recommended="Uyumlu.", best_occasions=[], seasonal_fit=[], compliment_score=0.8, versatility_score=0.8, progression_level="Orta", brand_tier=row['brand_tier'])
+        return ExpertRecommendation(perfume_name=row['name'], brand=row['brand'], cluster=row['cluster'], similarity_score=row['similarity'], brand_tier=row['brand_tier'])
 
 # ============================================================================
 # REPORT MODULE & UI
 # ============================================================================
 
-def send_full_report_email(answers, signature, wardrobe):
+def send_balanced_report_email(answers, signature, wardrobe):
     try:
-        if "EMAIL_ADDRESS" in st.secrets:
+        if "EMAIL_ADDRESS" in st.secrets and "EMAIL_PASSWORD" in st.secrets:
             sender = st.secrets["EMAIL_ADDRESS"]; psw = st.secrets["EMAIL_PASSWORD"]
             msg = MIMEMultipart(); msg['From'] = sender; msg['To'] = sender
-            msg['Subject'] = f"🚀 AuraScent Global Rapor - {datetime.date.today()}"
+            msg['Subject'] = f"✨ AuraScent Dengeli Rapor - {datetime.date.today()}"
+            
             body = "=== PROFİL ===\n"
             for k, v in answers.items(): body += f"{QUESTIONS[k]['question']} -> {v}\n"
-            body += "\n=== 🌟 HİBRİT İMZALAR ===\n"
-            t_map = {"niche": "NICHE", "premium": "DESIGNER", "zara": "ZARA", "middle_east": "ORTA DOĞU"}
-            for r in signature: body += f"[{t_map.get(r.brand_tier, 'DIĞER')}] {r.perfume_name} ({r.brand})\n"
-            body += "\n=== 👔 GARDIROP ===\n"
+            
+            body += "\n=== 🌟 HİBRİT İMZALAR (TOP 5 PER TIER) ===\n"
+            t_map = {"niche": "NICHE", "premium": "DESIGNER", "zara": "ZARA", "middle_east": "CLONE"}
+            for r in signature: body += f"[{t_map.get(r.brand_tier, 'DIĞER')}] {r.perfume_name} (%{r.similarity_score*100:.1f})\n"
+            
+            body += "\n=== 👔 GARDIROP (TOP 5 PER OCCASION) ===\n"
             for occ, items in wardrobe.items():
                 body += f"\n> {occ}:\n"
-                for r in items: body += f"  - {r.perfume_name} ({r.brand}) [{r.brand_tier.upper()}]\n"
+                for r in items: body += f"  - {r.perfume_name} (%{r.similarity_score*100:.1f})\n"
+            
             msg.attach(MIMEText(body, 'plain', 'utf-8'))
             s = smtplib.SMTP('smtp.gmail.com', 587); s.starttls(); s.login(sender, psw)
             s.send_message(msg); s.quit()
-    except: pass
+            return True
+    except Exception as e:
+        st.error(f"Mail gönderimi başarısız: {e}")
+        return False
 
 def run_streamlit_app():
-    st.set_page_config(page_title="AuraScent Master", page_icon="✨")
+    st.set_page_config(page_title="AuraScent Master V9.1", page_icon="✨", layout="wide")
     @st.cache_resource
-    def load_engine(): return MasterUltimateEngineV8("aurascent_all_profiles.csv")
+    def load_engine(): return MasterUltimateEngineV91("aurascent_all_profiles.csv")
     engine = load_engine()
 
     if 'step' not in st.session_state: st.session_state.step = 0; st.session_state.answers = {}
     q_keys = list(QUESTIONS.keys())
 
     if st.session_state.step < len(q_keys):
-        st.title("✨ AuraScent Master")
+        st.title("✨ AuraScent Master V9.1")
         q_key = q_keys[st.session_state.step]; q_data = QUESTIONS[q_key]
         ans = st.radio(q_data['question'], q_data['options'], key=f"r_{q_key}")
         if st.button("İlerle ➔"):
             st.session_state.answers[q_key] = ans
             st.session_state.step += 1; st.rerun()
     else:
-        st.success("Analiz Tamamlandı!")
-        sig, _ = engine.recommend_hybrid_signature(st.session_state.answers)
-        sig_bases = {engine._extract_base(r.perfume_name) for r in sig}
-        wardrobe = engine.build_wardrobe(st.session_state.answers, sig_bases)
-        send_full_report_email(st.session_state.answers, sig, wardrobe)
+        st.success("Analiz Tamamlandı! Kategori başına 5 en iyi öneri hazırlandı.")
+        sig, wardrobe = engine.recommend_balanced(st.session_state.answers)
         
-        st.header("🌟 Hibrit İmzalar (4 Farklı Segment)")
-        for r in sig: st.write(f"**[{r.brand_tier.upper()}]** {r.perfume_name} - {r.brand}")
-        st.header("👔 Gardırop Stratejisi")
-        for occ, items in wardrobe.items():
-            with st.expander(occ):
-                for r in items: st.write(f"- {r.perfume_name} ({r.brand})")
+        # Mail gönderimi ve UI bildirimi
+        mail_sent = send_balanced_report_email(st.session_state.answers, sig, wardrobe)
+        if mail_sent: st.info("📬 Rapor e-posta adresine başarıyla gönderildi!")
+        
+        st.header("🌟 Hibrit İmzalar (Her Kategoriden 5)")
+        tiers = ["niche", "premium", "zara", "middle_east"]
+        titles = ["💎 NICHE", "👔 DESIGNER", "👗 ZARA", "🐪 CLONE"]
+        cols = st.columns(4)
+        for t, title, col in zip(tiers, titles, cols):
+            with col:
+                st.subheader(title)
+                for r in [x for x in sig if x.brand_tier == t]:
+                    st.write(f"- {r.perfume_name} (%{r.similarity_score*100:.1f})")
+        
+        st.header("👔 Gardırop Stratejisi (Her Ortam İçin 5)")
+        occ_cols = st.columns(3)
+        for (occ, items), o_col in zip(wardrobe.items(), occ_cols):
+            with o_col:
+                st.subheader(f"> {occ}")
+                for r in items:
+                    st.write(f"- {r.perfume_name} (%{r.similarity_score*100:.1f})")
+        
         if st.button("🔄 Yeniden Başlat"): st.session_state.step = 0; st.session_state.answers = {}; st.rerun()
 
 if __name__ == "__main__": run_streamlit_app()
