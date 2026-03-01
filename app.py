@@ -1,6 +1,6 @@
 """
-AuraScent Master Ultimate v8.6 READY FOR DEPLOYMENT + EMAIL REPORT + TURKISH UI
-================================================================================
+AuraScent Master Ultimate v8.7 FIXED + TIER DIVERSITY (1 Niche, 1 Designer, 1 Clone)
+==================================================================================
 """
 
 import streamlit as st
@@ -46,13 +46,8 @@ def get_brand_tier(brand: str) -> str:
     return "premium"
 
 def get_contextual_tier_multiplier(tier: str, mode: str, answers: Dict[str, str]) -> float:
-    is_high_class = answers.get("Q1") in ["Doğal Lider", "Klasik Beyefendi"] or answers.get("Q4") == "Takım Elbise"
-    if is_high_class:
-        return {"niche": 1.10, "premium": 1.05, "mass": 0.75}.get(tier, 1.0)
-    else:
-        if mode == "SIGNATURE":
-            return {"niche": 1.05, "premium": 1.05, "mass": 0.95}.get(tier, 1.0)
-        return 1.0
+    # V8.7: Seçim kuralı değiştiği için çarpanları daha dengeli hale getiriyoruz
+    return 1.0 
 
 SEASONAL_PROFILES = {
     "İlkbahar": {"clusters": ["Citrus-Aromatic", "Green-Fresh", "Floral-Musky", "Woody-Aromatic"], "intensity_range": (0.30, 0.65), "boost_factor": 1.10},
@@ -73,7 +68,6 @@ OCCASION_PROFILES = {
 COMPLIMENT_BASE = {"Blue-Fresh": 0.90, "Citrus-Aromatic": 0.85, "Barbershop": 0.80, "Sweet-Gourmand": 0.80, "Spicy-Oriental": 0.75, "Aquatic-Marine": 0.75, "Woody-Aromatic": 0.70, "Green-Fresh": 0.65, "Floral-Musky": 0.60, "Powdery-Iris": 0.55, "Leather-Smoky": 0.45, "Dark-Oriental": 0.40, "Unique-Niche": 0.30}
 VERSATILITY_BASE = {"Blue-Fresh": 0.90, "Woody-Aromatic": 0.90, "Citrus-Aromatic": 0.85, "Barbershop": 0.85, "Spicy-Oriental": 0.70, "Aquatic-Marine": 0.50, "Sweet-Gourmand": 0.60, "Green-Fresh": 0.65, "Floral-Musky": 0.60, "Powdery-Iris": 0.55, "Leather-Smoky": 0.40, "Dark-Oriental": 0.35, "Unique-Niche": 0.25}
 
-# YENİ EKLENEN KISIM: Soru 1'in Türkçeleştirilmesi
 QUESTIONS = {
     "Q1": {"question": "Kendinizi nasıl tanımlarsınız?", "options": ["Doğal Lider", "Klasik Beyefendi", "Özgür Ruhlu / Asi", "Modern Minimalist", "Romantik / Çekici", "Sportif / Enerjik"]},
     "Q2": {"question": "Parfümü en çok hangi ortamda kullanacaksınız?", "options": ["Kapalı Ofis", "Randevu Gecesi", "Gece Kulübü", "Günlük Hayat", "Spor/Aktiv Ortam", "Özel Etkinlik"]},
@@ -258,16 +252,11 @@ class MasterUltimateEngineV8:
 
         weights = config["weights"]
         weights_array = np.array([weights[k] for k in AURA_KEYS])
-        
-        user_vec_raw = np.array([user_aura[k] for k in AURA_KEYS])
-        perf_vecs_raw = self.df[[f'aura_{k}' for k in AURA_KEYS]].values
-        
-        user_vec = user_vec_raw * weights_array
-        perf_vecs = perf_vecs_raw * weights_array
+        user_vec = np.array([user_aura[k] for k in AURA_KEYS]) * weights_array
+        perf_vecs = self.df[[f'aura_{k}' for k in AURA_KEYS]].values * weights_array
 
         user_norm = user_vec / (np.linalg.norm(user_vec) + 1e-12)
         perf_norms = perf_vecs / (np.linalg.norm(perf_vecs, axis=1, keepdims=True) + 1e-12)
-        
         self.df['base_similarity'] = perf_norms @ user_norm
         
         tier_multipliers = self.df['brand_tier'].apply(lambda t: get_contextual_tier_multiplier(t, mode, answers))
@@ -278,7 +267,6 @@ class MasterUltimateEngineV8:
         self.df['similarity'] += season_boost
 
         mask = pd.Series([True] * len(self.df))
-        
         is_alpha_formal = answers.get("Q4") == "Takım Elbise" or answers.get("Q1") in ["Doğal Lider", "Klasik Beyefendi"]
         if is_alpha_formal:
             mask &= (self.df['aura_maturity'] >= 0.60)
@@ -300,46 +288,51 @@ class MasterUltimateEngineV8:
 
         candidates = self.df[mask].copy().sort_values('similarity', ascending=False)
 
-        if enforce_diversity:
-            selected = []
-            cluster_counts = Counter()
+        # ====================================================================
+        # V8.7: HİBRİT İMZA SEÇİM MANTIĞI (1 Niche, 1 Designer, 1 Clone)
+        # ====================================================================
+        if mode == "SIGNATURE":
+            selected_indices = []
             used_base_names = set()
             
+            # Her tier'dan en iyi uyanı seç
+            for tier in ["niche", "premium", "mass"]:
+                tier_candidates = candidates[candidates['brand_tier'] == tier]
+                for idx, row in tier_candidates.iterrows():
+                    base_name = extract_base_name(row['name'])
+                    if base_name not in used_base_names:
+                        selected_indices.append(idx)
+                        used_base_names.add(base_name)
+                        break
+            
+            # Eğer 3 tane seçemediysek (veri kısıtlıysa), en iyi benzerlikleri ekle
+            if len(selected_indices) < 3:
+                remaining = candidates[~candidates.index.isin(selected_indices)]
+                for idx, row in remaining.iterrows():
+                    base_name = extract_base_name(row['name'])
+                    if base_name not in used_base_names:
+                        selected_indices.append(idx)
+                        used_base_names.add(base_name)
+                    if len(selected_indices) >= 3: break
+            
+            selected_indices = selected_indices[:3]
+        else:
+            # Diğer modlar için klasik MMR çeşitliliği
+            selected_indices = []
+            used_bases = set()
             for idx, row in candidates.iterrows():
-                base_name = extract_base_name(row['name'])
-                if cluster_counts[row['cluster']] < 2 and base_name not in used_base_names:
-                    selected.append(idx)
-                    cluster_counts[row['cluster']] += 1
-                    used_base_names.add(base_name)
-                if len(selected) >= top_n * 3: break
-            candidates = candidates.loc[selected]
-
-        selected_indices = []
-        remaining = candidates.index.tolist()
-        lambda_mmr = config.get("lambda_mmr", 0.72)
-        if remaining:
-            selected_indices.append(remaining[0])
-            remaining.remove(remaining[0])
-
-        while len(selected_indices) < min(top_n, len(candidates)) and remaining:
-            best_mmr, best_idx = -float('inf'), None
-            for idx in remaining:
-                rel = candidates.loc[idx, 'similarity']
-                div = 0.6 if candidates.loc[idx, 'cluster'] in [candidates.loc[i, 'cluster'] for i in selected_indices] else 1.0
-                mmr = lambda_mmr * rel + (1 - lambda_mmr) * div
-                if mmr > best_mmr:
-                    best_mmr, best_idx = mmr, idx
-            if best_idx:
-                selected_indices.append(best_idx)
-                remaining.remove(best_idx)
-            else: break
+                base = extract_base_name(row['name'])
+                if base not in used_bases:
+                    selected_indices.append(idx)
+                    used_bases.add(base)
+                if len(selected_indices) >= top_n: break
+        # ====================================================================
 
         final_recs = []
         for idx in selected_indices:
             row = candidates.loc[idx]
             compliment = calculate_dynamic_compliment(row['cluster'], row['brand_tier'], row.get('aura_uniqueness', 0.5))
             versatility = calculate_dynamic_versatility(row['cluster'], row.get('aura_intensity', 0.5), row.get('aura_approachability', 0.5))
-            
             why = f"Karakterinize ve tercihlerinize {current_season} mevsiminde tam uyum sağlıyor."
             prog_level = "İleri" if row.get('aura_uniqueness', 0.5) > 0.75 else "Orta" if row.get('aura_uniqueness', 0.5) > 0.50 else "Başlangıç"
             
@@ -375,7 +368,7 @@ class MasterUltimateEngineV8:
 
 
 # ============================================================================
-# E-POSTA GÖNDERME MODÜLÜ (Sadece Cloud'da Secret girilince çalışır)
+# E-POSTA GÖNDERME MODÜLÜ
 # ============================================================================
 def send_results_to_email(answers: Dict[str, str], signature_recs: List[ExpertRecommendation]):
     try:
@@ -383,34 +376,25 @@ def send_results_to_email(answers: Dict[str, str], signature_recs: List[ExpertRe
             import smtplib
             from email.mime.text import MIMEText
             from email.mime.multipart import MIMEMultipart
-
             sender_email = st.secrets["EMAIL_ADDRESS"]
             sender_password = st.secrets["EMAIL_PASSWORD"]
-            receiver_email = st.secrets["EMAIL_ADDRESS"] # Kendi mail adresine gönderir
-            
             msg = MIMEMultipart()
             msg['From'] = sender_email
-            msg['To'] = receiver_email
+            msg['To'] = sender_email
             msg['Subject'] = "🌟 Yeni AuraScent Analizi Geldi!"
-            
             body = "Birisi AuraScent testini tamamladı! İşte profili:\n\n=== VERİLEN YANITLAR ===\n"
             for k, v in answers.items():
                 body += f"{QUESTIONS[k]['question']} -> {v}\n"
-                
             body += "\n=== İMZA ÖNERİLERİ ===\n"
             for i, r in enumerate(signature_recs, 1):
                 body += f"{i}. {r.perfume_name} ({r.brand}) - Sınıf: {r.brand_tier.upper()}\n"
-                
             msg.attach(MIMEText(body, 'plain', 'utf-8'))
-            
             server = smtplib.SMTP('smtp.gmail.com', 587)
             server.starttls()
             server.login(sender_email, sender_password)
             server.send_message(msg)
             server.quit()
-    except Exception:
-        # Hata olsa bile kullanıcının ekranını bozmamak için sessizce geç
-        pass
+    except Exception: pass
 
 # ============================================================================
 # STREAMLIT WEB INTERFACE
@@ -418,88 +402,58 @@ def send_results_to_email(answers: Dict[str, str], signature_recs: List[ExpertRe
 
 def run_streamlit_app():
     st.set_page_config(page_title="AuraScent Master Ultimate", page_icon="✨", layout="centered")
-
     @st.cache_resource
-    def load_engine():
-        return MasterUltimateEngineV8("aurascent_all_profiles.csv")
-    
-    try:
-        engine = load_engine()
+    def load_engine(): return MasterUltimateEngineV8("aurascent_all_profiles.csv")
+    try: engine = load_engine()
     except FileNotFoundError:
-        st.error("❌ 'aurascent_all_profiles.csv' dosyası bulunamadı. Lütfen aynı dizinde olduğundan emin ol.")
+        st.error("❌ 'aurascent_all_profiles.csv' dosyası bulunamadı.")
         return
-
     if 'step' not in st.session_state:
         st.session_state.step = 0
         st.session_state.answers = {}
-
     question_keys = list(QUESTIONS.keys())
     total_steps = len(question_keys)
-
     st.title("✨ AuraScent Master Ultimate")
-    
     if st.session_state.step < total_steps:
         st.progress(st.session_state.step / total_steps)
-        st.markdown(f"**Soru {st.session_state.step + 1} / {total_steps}**")
-        
         current_q_key = question_keys[st.session_state.step]
         current_q_data = QUESTIONS[current_q_key]
-        
         with st.container():
             st.markdown(f"### 💬 {current_q_data['question']}")
-            choice = st.radio("Lütfen size en uygun olanı seçin:", current_q_data['options'], key=f"radio_{current_q_key}")
-            st.write("") 
-            
+            choice = st.radio("Seçiminizi yapın:", current_q_data['options'], key=f"radio_{current_q_key}")
             if st.button("Sonraki Soru ➔", type="primary"):
                 st.session_state.answers[current_q_key] = choice
                 st.session_state.step += 1
                 st.rerun()
-
     else:
         st.progress(1.0)
-        st.success("Analiz tamamlandı! Master Perfumer profilinizi hazırladı.")
-        
+        st.success("Analiz tamamlandı!")
         with st.expander("📋 Verilen Yanıtlar", expanded=False):
             for q_key, ans in st.session_state.answers.items():
-                q_text = QUESTIONS[q_key]["question"]
-                st.markdown(f"- **{q_text}** ➔ {ans}")
-        
+                st.markdown(f"- **{QUESTIONS[q_key]['question']}** ➔ {ans}")
         with st.spinner("Kokularınız harmanlanıyor..."):
             time.sleep(1.5) 
-            
             st.markdown("---")
             st.header("🌟 SIGNATURE (İmza Karakter Önerileri)")
-            
-            recs, analysis = engine.recommend_comprehensive(st.session_state.answers, mode="SIGNATURE", top_n=3)
+            recs, _ = engine.recommend_comprehensive(st.session_state.answers, mode="SIGNATURE", top_n=3)
             signature_base_names = {extract_base_name(r.perfume_name) for r in recs}
-            
-            # E-posta gönderme fonksiyonunu arka planda tetikle
             send_results_to_email(st.session_state.answers, recs)
-            
             for i, rec in enumerate(recs, 1):
-                with st.expander(f"{i}. {rec.perfume_name} - {rec.brand}", expanded=(i==1)):
+                label = "🏆 Niş" if rec.brand_tier == "niche" else "👔 Designer" if rec.brand_tier == "premium" else "🕌 Orta Doğu (Clone)"
+                with st.expander(f"{i}. {rec.perfume_name} - {rec.brand} ({label})", expanded=(i==1)):
                     col1, col2 = st.columns([1, 3])
-                    with col1:
-                        st.image("https://via.placeholder.com/150?text=Sise+Gorseli", caption="Yakında Eklenecek")
+                    with col1: st.image("https://via.placeholder.com/150?text=Sise+Gorseli", caption="Yakında Eklenecek")
                     with col2:
-                        st.markdown(f"**Sınıf:** `{rec.brand_tier.upper()}` | **Kategori:** `{rec.cluster}`")
                         st.markdown(f"**Uyum Skoru:** `%{(rec.similarity_score * 100):.1f}`")
                         st.markdown(f"**Neden Önerildi:** {rec.why_recommended}")
                         st.markdown(f"**Master Notları:** {', '.join(rec.expert_notes)}")
-
             st.markdown("---")
             st.header("👔 WARDROBE (Kullanım Alanına Göre Gardırop)")
-            
             wardrobe = engine.build_wardrobe(st.session_state.answers, exclude_base_names=signature_base_names)
             tabs = st.tabs(list(wardrobe.keys()))
-            
             for index, (occ, items) in enumerate(wardrobe.items()):
                 with tabs[index]:
-                    st.markdown(f"#### {occ} için En İyi Seçimler")
-                    for r in items:
-                        st.markdown(f"- **{r.perfume_name}** ({r.brand}) ➔ *Sınıf: {r.brand_tier.capitalize()}*")
-            
-            st.markdown("---")
+                    for r in items: st.markdown(f"- **{r.perfume_name}** ({r.brand}) ➔ *Sınıf: {r.brand_tier.capitalize()}*")
             if st.button("🔄 Testi Yeniden Çöz"):
                 st.session_state.step = 0
                 st.session_state.answers = {}
